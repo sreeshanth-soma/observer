@@ -125,6 +125,9 @@ else
     for i in {1..10}; do
         if curl -sf --max-time 2 "http://127.0.0.1:${OB_PORT}/api.php" -d 'c=account&a=uid' >/dev/null 2>&1; then
             echo "  Server ready (PID $PHP_PID)"
+            if [ "$LOAD_LEVEL" != "10" ]; then
+                echo "  ⚠  PHP dev server is single-threaded. ${LOAD_LEVEL} VUs will queue — use Apache/Nginx for realistic results."
+            fi
             break
         fi
         if [ $i -eq 10 ]; then
