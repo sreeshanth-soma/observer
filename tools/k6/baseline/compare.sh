@@ -34,12 +34,14 @@ BASE_LEVEL=$(jq -r '.load_level // "unknown"' "$BASELINE")
 CURR_LEVEL=$(jq -r '.load_level // "unknown"' "$CURRENT")
 BASE_TIME=$(jq -r '.timestamp // "unknown"' "$BASELINE")
 CURR_TIME=$(jq -r '.timestamp // "unknown"' "$CURRENT")
+BASE_COMMIT=$(jq -r '.git_commit // "unknown"' "$BASELINE")
+CURR_COMMIT=$(jq -r '.git_commit // "unknown"' "$CURRENT")
 
 echo ""
 echo "═══════════════════════════════════════════════════════════════════════════"
 echo "  Baseline Comparison"
-echo "  Baseline: ${BASE_TIME} (${BASE_LEVEL})"
-echo "  Current:  ${CURR_TIME} (${CURR_LEVEL})"
+echo "  Baseline: ${BASE_TIME} (${BASE_LEVEL} VUs, commit ${BASE_COMMIT})"
+echo "  Current:  ${CURR_TIME} (${CURR_LEVEL} VUs, commit ${CURR_COMMIT})"
 echo "═══════════════════════════════════════════════════════════════════════════"
 echo ""
 

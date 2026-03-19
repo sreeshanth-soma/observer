@@ -278,6 +278,7 @@ export function handleSummary(data) {
     const summary = {
         timestamp:  new Date().toISOString(),
         load_level: LOAD_LEVEL,
+        git_commit: __ENV.GIT_COMMIT || 'unknown',
         scenarios:  {},
         global: {
             p95_ms:       data.metrics.http_req_duration ? data.metrics.http_req_duration.values['p(95)'] : null,

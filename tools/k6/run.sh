@@ -40,6 +40,24 @@ set +a
 
 # ── Parse arguments ──────────────────────────────────────────────────────────
 
+# Handle --help before anything else.
+case "${1:-}" in
+    -h|--help)
+        echo "Usage: ./run.sh [10|100|1000] [--baseline-save] [--baseline-compare]"
+        echo ""
+        echo "Levels:"
+        echo "  10     Smoke test (10 concurrent users, 30s)"
+        echo "  100    Medium load (100 concurrent users, 60s)"
+        echo "  1000   Stress test (1000 concurrent users, 120s)"
+        echo ""
+        echo "Options:"
+        echo "  --baseline-save      Save this run as the reference baseline"
+        echo "  --baseline-compare   Compare this run against the saved baseline"
+        echo "  -h, --help           Show this help"
+        exit 0
+        ;;
+esac
+
 LOAD_LEVEL="${1:-10}"
 BASELINE_SAVE=false
 BASELINE_COMPARE=false
@@ -54,6 +72,7 @@ done
 
 if [[ ! "$LOAD_LEVEL" =~ ^(10|100|1000)$ ]]; then
     echo "Error: load level must be '10', '100', or '1000' (got '$LOAD_LEVEL')"
+    echo "  Run ./run.sh --help for usage."
     exit 1
 fi
 
@@ -139,6 +158,7 @@ K6_ENV_FLAGS=(
     -e "OB_TEST_MEDIA_ID=${OB_TEST_MEDIA_ID:-}"
     -e "OB_TEST_USER_ID=${OB_TEST_USER_ID:-1}"
     -e "K6_LOAD_LEVEL=${LOAD_LEVEL}"
+    -e "GIT_COMMIT=$(git -C "$OB_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
 )
 
 # ── Run k6 ───────────────────────────────────────────────────────────────────
@@ -153,11 +173,22 @@ echo ""
 
 REPORT_HTML="outputs/report-${TIMESTAMP}-${LOAD_LEVEL}vus.html"
 
+K6_EXIT=0
 K6_WEB_DASHBOARD=true \
 K6_WEB_DASHBOARD_EXPORT="$REPORT_HTML" \
 k6 run \
     "${K6_ENV_FLAGS[@]}" \
-    main.js
+    main.js || K6_EXIT=$?
+
+if [ "$K6_EXIT" -eq 99 ]; then
+    echo ""
+    echo "  ⚠  Thresholds crossed (exit 99) — review the results above."
+    echo "     This is expected on the PHP dev server (single-threaded)."
+elif [ "$K6_EXIT" -ne 0 ]; then
+    echo ""
+    echo "  ✗  k6 failed with exit code $K6_EXIT"
+    exit "$K6_EXIT"
+fi
 
 echo ""
 echo "  HTML report saved to: ${REPORT_HTML}"
