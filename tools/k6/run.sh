@@ -3,13 +3,13 @@
 # OpenBroadcaster Observer — k6 Load Test Runner
 #
 # Usage:
-#   ./run.sh [low|medium|high] [--baseline-save] [--baseline-compare]
+#   ./run.sh [10|100|1000] [--baseline-save] [--baseline-compare]
 #
 # Examples:
-#   ./run.sh low                       # smoke test with ~15 VUs
-#   ./run.sh medium --baseline-save    # run at ~150 VUs and save results as baseline
-#   ./run.sh medium --baseline-compare # run at ~150 VUs and compare against saved baseline
-#   ./run.sh high                      # stress test with ~1100 VUs
+#   ./run.sh 10                         # smoke test with 10 VUs
+#   ./run.sh 100 --baseline-save        # run at 100 VUs and save results as baseline
+#   ./run.sh 100 --baseline-compare     # run at 100 VUs and compare against saved baseline
+#   ./run.sh 1000                       # stress test with 1000 VUs
 #
 # Prerequisites:
 #   - k6 installed (https://k6.io/docs/get-started/installation/)
@@ -40,7 +40,7 @@ set +a
 
 # ── Parse arguments ──────────────────────────────────────────────────────────
 
-LOAD_LEVEL="${1:-low}"
+LOAD_LEVEL="${1:-10}"
 BASELINE_SAVE=false
 BASELINE_COMPARE=false
 
@@ -48,12 +48,12 @@ for arg in "$@"; do
     case "$arg" in
         --baseline-save)    BASELINE_SAVE=true ;;
         --baseline-compare) BASELINE_COMPARE=true ;;
-        low|medium|high)    LOAD_LEVEL="$arg" ;;
+        10|100|1000)        LOAD_LEVEL="$arg" ;;
     esac
 done
 
-if [[ ! "$LOAD_LEVEL" =~ ^(low|medium|high)$ ]]; then
-    echo "Error: load level must be 'low', 'medium', or 'high' (got '$LOAD_LEVEL')"
+if [[ ! "$LOAD_LEVEL" =~ ^(10|100|1000)$ ]]; then
+    echo "Error: load level must be '10', '100', or '1000' (got '$LOAD_LEVEL')"
     exit 1
 fi
 
@@ -146,14 +146,21 @@ K6_ENV_FLAGS=(
 echo ""
 echo "╔══════════════════════════════════════════════════════════════╗"
 echo "║  Observer k6 Load Test                                      ║"
-echo "║  Level: ${LOAD_LEVEL}                                              ║"
+echo "║  VUs: ${LOAD_LEVEL}                                                 ║"
 echo "║  Target: ${OB_BASE_URL}                                     "
 echo "╚══════════════════════════════════════════════════════════════╝"
 echo ""
 
-K6_WEB_DASHBOARD=true k6 run \
+REPORT_HTML="outputs/report-${TIMESTAMP}-${LOAD_LEVEL}vus.html"
+
+K6_WEB_DASHBOARD=true \
+K6_WEB_DASHBOARD_EXPORT="$REPORT_HTML" \
+k6 run \
     "${K6_ENV_FLAGS[@]}" \
     main.js
+
+echo ""
+echo "  HTML report saved to: ${REPORT_HTML}"
 
 # ── Post-run: baseline management ───────────────────────────────────────────
 

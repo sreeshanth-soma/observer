@@ -22,19 +22,26 @@ export const PLAYER_ID        = __ENV.OB_PLAYER_ID;
 export const PLAYER_PASSWORD  = __ENV.OB_PLAYER_PASSWORD;
 export const TEST_MEDIA_ID    = __ENV.OB_TEST_MEDIA_ID || '';
 export const TEST_USER_ID     = __ENV.OB_TEST_USER_ID || '1';
-export const LOAD_LEVEL       = __ENV.K6_LOAD_LEVEL || 'low';
+export const LOAD_LEVEL       = __ENV.K6_LOAD_LEVEL || '10';
 
-// VU counts per scenario for each load level.
+// VU counts per scenario for each concurrency level.
 // Weighted by scenario heaviness: media_upload is expensive, media_availability is cheap.
+//
+//   Level  Total VUs  Breakdown
+//   ─────  ─────────  ─────────────────────────────────────────
+//     10        10    upload=1  playlist=2  schedule=2  avail=3  sync=2
+//    100       100    upload=10 playlist=20 schedule=20 avail=30 sync=20
+//   1000      1000    upload=100 playlist=200 schedule=200 avail=300 sync=200
+//
 export const VU_MAP = {
-    low:    { media_upload: 2,   playlist_creation: 3,   scheduling: 3,   media_availability: 5,   playout_device_sync: 2  },
-    medium: { media_upload: 20,  playlist_creation: 30,  scheduling: 30,  media_availability: 50,  playout_device_sync: 20 },
-    high:   { media_upload: 100, playlist_creation: 200, scheduling: 200, media_availability: 500, playout_device_sync: 100 },
+    '10':   { media_upload: 1,   playlist_creation: 2,   scheduling: 2,   media_availability: 3,   playout_device_sync: 2   },
+    '100':  { media_upload: 10,  playlist_creation: 20,  scheduling: 20,  media_availability: 30,  playout_device_sync: 20  },
+    '1000': { media_upload: 100, playlist_creation: 200, scheduling: 200, media_availability: 300, playout_device_sync: 200 },
 };
 
-// Test duration per load level.
+// Test duration per concurrency level.
 export const DURATION_MAP = {
-    low:    '30s',
-    medium: '60s',
-    high:   '120s',
+    '10':   '30s',
+    '100':  '60s',
+    '1000': '120s',
 };

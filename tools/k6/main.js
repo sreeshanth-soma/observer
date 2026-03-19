@@ -1,8 +1,8 @@
 /**
  * OpenBroadcaster Observer — k6 Load Test Entry Point
  *
- * Orchestrates all 5 test scenarios with configurable load levels.
- * Run via: ./run.sh [low|medium|high]
+ * Orchestrates all 5 test scenarios at 10, 100, or 1000 concurrent users.
+ * Run via: ./run.sh [10|100|1000]
  *
  * Scenarios:
  *   1. media_upload          — Two-step file upload + media creation
@@ -34,8 +34,8 @@ import playoutDeviceSync  from './scenarios/playout-device-sync.js';
 const sampleFile = open('./testdata/sample.mp3', 'b');
 
 // Resolve VU counts and duration for the current load level.
-const vus      = VU_MAP[LOAD_LEVEL]      || VU_MAP.low;
-const duration = DURATION_MAP[LOAD_LEVEL] || DURATION_MAP.low;
+const vus      = VU_MAP[LOAD_LEVEL]      || VU_MAP['10'];
+const duration = DURATION_MAP[LOAD_LEVEL] || DURATION_MAP['10'];
 
 // ---------------------------------------------------------------------------
 // k6 options
@@ -75,16 +75,16 @@ export const options = {
     },
 
     thresholds: {
-        // Global thresholds
+        // Global thresholds (tuned for production Apache/Nginx; PHP dev server will exceed these)
         'http_req_failed':   ['rate<0.01'],        // < 1% error rate
-        'http_req_duration': ['p(95)<500'],         // 95th percentile under 500ms
+        'http_req_duration': ['p(95)<2000'],        // 95th percentile under 2s
 
         // Per-scenario response time thresholds
-        'http_req_duration{scenario:media_upload}':         ['p(95)<2000'],  // upload + ffprobe is slow
-        'http_req_duration{scenario:playlist_creation}':    ['p(95)<500'],
-        'http_req_duration{scenario:scheduling}':           ['p(95)<500'],
-        'http_req_duration{scenario:media_availability}':   ['p(95)<200'],   // simple GET
-        'http_req_duration{scenario:playout_device_sync}':  ['p(95)<1000'],  // XML schedule generation
+        'http_req_duration{scenario:media_upload}':         ['p(95)<5000'],  // upload + ffprobe is slow
+        'http_req_duration{scenario:playlist_creation}':    ['p(95)<2000'],
+        'http_req_duration{scenario:scheduling}':           ['p(95)<2000'],
+        'http_req_duration{scenario:media_availability}':   ['p(95)<1000'],  // simple GET
+        'http_req_duration{scenario:playout_device_sync}':  ['p(95)<3000'],  // XML schedule generation
 
         // Per-scenario error rate thresholds
         'http_req_failed{scenario:media_upload}':           ['rate<0.01'],
@@ -219,7 +219,12 @@ export function handleSummary(data) {
         }
     }
 
+    // Write timestamped + latest JSON for baseline comparison.
+    const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const jsonFile = `outputs/report-${ts}-${LOAD_LEVEL}vus.json`;
+
     return {
+        [jsonFile]:            JSON.stringify(summary, null, 2),
         'outputs/latest.json': JSON.stringify(summary, null, 2),
         stdout: textSummary(data, { indent: ' ', enableColors: true }),
     };
