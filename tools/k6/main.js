@@ -18,6 +18,7 @@
  */
 
 import http from 'k6/http';
+import { sleep } from 'k6';
 import { textSummary } from 'https://jslib.k6.io/k6-summary/0.1.0/index.js';
 import { BASE_URL, USERNAME, PASSWORD, LOAD_LEVEL, TEST_MEDIA_ID, VU_MAP, DURATION_MAP } from './lib/config.js';
 import { login, apiCall } from './lib/auth.js';
@@ -93,6 +94,9 @@ export const options = {
         'http_req_failed{scenario:media_availability}':     ['rate<0.01'],
         'http_req_failed{scenario:playout_device_sync}':    ['rate<0.01'],
     },
+
+    // Teardown needs extra time to clean up test data via API calls.
+    teardownTimeout: '120s',
 };
 
 // ---------------------------------------------------------------------------
@@ -172,6 +176,95 @@ export function playlistCreationScenario(data)   { playlistCreation(data); }
 export function schedulingScenario(data)         { scheduling(data); }
 export function mediaAvailabilityScenario(data)  { mediaAvailability(data); }
 export function playoutDeviceSyncScenario(data)  { playoutDeviceSync(data); }
+
+// ---------------------------------------------------------------------------
+// Teardown: clean up test data created during the run
+// ---------------------------------------------------------------------------
+export function teardown(data) {
+    const { session } = data;
+    let deleted = { media: 0, playlists: 0, timeslots: 0 };
+
+    // Helper: safely parse JSON response (may be null if server is busy).
+    const safeJson = (res) => {
+        try { return res && res.body ? res.json() : null; }
+        catch (e) { return null; }
+    };
+
+    // Brief pause to let the server finish processing final VU requests.
+    sleep(2);
+
+    // 1. Delete media items created by k6 (artist = 'k6 Load Test' or 'k6 Setup')
+    try {
+        const mediaRes = apiCall(session, 'media', 'search', {
+            q: { mode: 'simple', string: 'k6 Load Test' },
+            l: 1000,
+            o: 0,
+            my: true,
+        });
+        const mediaBody = safeJson(mediaRes);
+        if (mediaBody && mediaBody.status && mediaBody.data && mediaBody.data.media) {
+            const ids = mediaBody.data.media
+                .filter(m => m.artist && m.artist.startsWith('k6'))
+                .map(m => m.id);
+            if (ids.length > 0) {
+                apiCall(session, 'media', 'delete', { id: ids });
+                deleted.media = ids.length;
+            }
+        }
+    } catch (e) {
+        console.warn(`Teardown: media cleanup failed: ${e.message}`);
+    }
+
+    // 2. Delete playlists created by k6 (name starts with 'k6-test-')
+    try {
+        const plRes = apiCall(session, 'playlists', 'search', {
+            q: 'k6-test',
+            l: 1000,
+            o: 0,
+            my: true,
+        });
+        const plBody = safeJson(plRes);
+        if (plBody && plBody.status && plBody.data && plBody.data.playlists) {
+            const ids = plBody.data.playlists
+                .filter(p => p.name && p.name.startsWith('k6-test-'))
+                .map(p => p.id);
+            if (ids.length > 0) {
+                apiCall(session, 'playlists', 'delete', { id: ids });
+                deleted.playlists = ids.length;
+            }
+        }
+    } catch (e) {
+        console.warn(`Teardown: playlist cleanup failed: ${e.message}`);
+    }
+
+    // 3. Delete timeslots created by k6 (description starts with 'k6-load-test')
+    //    The timeslots API deletes one at a time by ID, and there's no search-by-description.
+    //    We search the far-future time range where k6 creates slots.
+    try {
+        const now = Math.floor(Date.now() / 1000);
+        const futureStart = now + 365 * 24 * 3600; // 1 year from now
+        const futureEnd   = now + 10 * 365 * 24 * 3600; // 10 years from now
+        const tsRes = apiCall(session, 'timeslots', 'search', {
+            start:  futureStart,
+            end:    futureEnd,
+            player: __ENV.OB_PLAYER_ID || '1',
+        });
+        const tsBody = safeJson(tsRes);
+        if (tsBody && tsBody.status && tsBody.data) {
+            const slots = tsBody.data
+                .filter(t => t.description && t.description.startsWith('k6-load-test'))
+                .slice(0, 50); // limit to avoid timeout
+            for (const slot of slots) {
+                apiCall(session, 'timeslots', 'delete', { id: slot.id });
+                deleted.timeslots++;
+            }
+        }
+    } catch (e) {
+        console.warn(`Teardown: timeslot cleanup failed: ${e.message}`);
+    }
+
+    console.log(`Teardown: deleted ${deleted.media} media, ${deleted.playlists} playlists, ${deleted.timeslots} timeslots`);
+}
 
 // ---------------------------------------------------------------------------
 // Custom summary: write structured JSON for baseline comparison

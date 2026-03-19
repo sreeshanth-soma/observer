@@ -1,3 +1,5 @@
 config.env
-outputs/
-baselines/
+outputs/*
+!outputs/.gitkeep
+baselines/*
+!baselines/.gitkeep
