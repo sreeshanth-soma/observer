@@ -293,7 +293,6 @@ export function handleSummary(data) {
     for (const name of scenarios) {
         const durKey  = `http_req_duration{scenario:${name}}`;
         const failKey = `http_req_failed{scenario:${name}}`;
-        const reqKey  = `http_reqs{scenario:${name}}`;
 
         summary.scenarios[name] = {
             p95_ms:     data.metrics[durKey]  ? data.metrics[durKey].values['p(95)'] : null,
@@ -302,14 +301,17 @@ export function handleSummary(data) {
             min_ms:     data.metrics[durKey]  ? data.metrics[durKey].values.min : null,
             max_ms:     data.metrics[durKey]  ? data.metrics[durKey].values.max : null,
             error_rate: data.metrics[failKey] ? data.metrics[failKey].values.rate : null,
-            requests:   data.metrics[reqKey]  ? data.metrics[reqKey].values.count : null,
+            // http_req_failed is a Rate metric — its passes + fails = total request count.
+            requests:   data.metrics[failKey] ? (data.metrics[failKey].values.passes + data.metrics[failKey].values.fails) : null,
         };
     }
 
-    // Threshold pass/fail status.
-    if (data.thresholds) {
-        for (const [name, info] of Object.entries(data.thresholds)) {
-            summary.thresholds[name] = info.ok !== undefined ? info.ok : null;
+    // Threshold pass/fail status — k6 embeds this in each metric, not in data.thresholds.
+    for (const [metricName, metric] of Object.entries(data.metrics)) {
+        if (metric.thresholds) {
+            for (const [thresholdExpr, result] of Object.entries(metric.thresholds)) {
+                summary.thresholds[`${metricName}: ${thresholdExpr}`] = result.ok;
+            }
         }
     }
 

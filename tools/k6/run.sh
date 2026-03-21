@@ -96,56 +96,101 @@ mkdir -p outputs baselines
 
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 
-# ── PHP dev server management ───────────────────────────────────────────────
-# Extract port from OB_BASE_URL (default 8000)
+# ── Server management (Nginx + PHP-FPM for parallel requests) ────────────────
+# Extract port from OB_BASE_URL (default 8080)
 OB_PORT=$(echo "$OB_BASE_URL" | grep -oE ':[0-9]+' | tail -1 | tr -d ':')
-OB_PORT=${OB_PORT:-8000}
+OB_PORT=${OB_PORT:-8080}
 
-PHP_PID=""
+PHP_FPM_PID=""
+NGINX_PID=""
+STARTED_SERVERS=false
 
 # Check if the server is already running and responding
 if curl -sf --max-time 2 "$OB_BASE_URL/api.php" -d 'c=account&a=uid' >/dev/null 2>&1; then
     echo "  Server already running at $OB_BASE_URL"
 else
-    echo "  Starting PHP dev server on 0.0.0.0:${OB_PORT}..."
+    # Check if nginx and php-fpm are available
+    if ! command -v nginx &>/dev/null; then
+        echo "Error: nginx is not installed. Install with: brew install nginx"
+        exit 1
+    fi
+    if ! command -v php-fpm &>/dev/null && [ ! -x /opt/homebrew/sbin/php-fpm ]; then
+        echo "Error: php-fpm is not available. It should come with: brew install php"
+        exit 1
+    fi
 
-    # Kill any stale PHP servers on this port
+    PHP_FPM_BIN=$(command -v php-fpm 2>/dev/null || echo /opt/homebrew/sbin/php-fpm)
+
+    echo "  Starting Nginx + PHP-FPM (${OB_PORT}, 20 workers)..."
+
+    # Kill any stale processes on our ports
     lsof -ti :"$OB_PORT" 2>/dev/null | xargs kill -9 2>/dev/null || true
+    lsof -ti :9099 2>/dev/null | xargs kill -9 2>/dev/null || true
     sleep 1
 
-    # Start PHP built-in server. Key details:
-    #   - Bind to 0.0.0.0 (not localhost) to ensure IPv4 works
-    #   - Redirect all output to log file to prevent tty suspension
-    #   - Run from Observer root so relative paths (routes.json) work
-    php -S "0.0.0.0:${OB_PORT}" -t "$OB_ROOT/public" \
-        > /tmp/ob_php_server.log 2>&1 &
-    PHP_PID=$!
+    # Prepare nginx config with correct document root and port
+    NGINX_CONF="/tmp/ob-k6-nginx.conf"
+    sed -e "s|__OB_PUBLIC_ROOT__|${OB_ROOT}/public|g" \
+        -e "s|listen 8080|listen ${OB_PORT}|g" \
+        "$SCRIPT_DIR/server/nginx-observer.conf" > "$NGINX_CONF"
 
-    # Wait for server to be ready
+    # Prepare PHP-FPM config with current user (so it can access media_data/)
+    FPM_CONF="/tmp/ob-k6-php-fpm.conf"
+    sed -e "s|__USER__|$(whoami)|g" \
+        -e "s|__GROUP__|$(id -gn)|g" \
+        "$SCRIPT_DIR/server/php-fpm-observer.conf" > "$FPM_CONF"
+
+    # Start PHP-FPM with our dedicated pool config
+    "$PHP_FPM_BIN" \
+        --fpm-config "$FPM_CONF" \
+        --daemonize \
+        2>/tmp/ob-k6-php-fpm-startup.log
+
+    # Brief pause for FPM to initialize workers
+    sleep 1
+
+    # Verify PHP-FPM is listening
+    if ! lsof -ti :9099 >/dev/null 2>&1; then
+        echo "Error: PHP-FPM failed to start on port 9099."
+        echo "  Check /tmp/ob-k6-php-fpm.log and /tmp/ob-k6-php-fpm-startup.log"
+        exit 1
+    fi
+    echo "  PHP-FPM ready (20 workers on :9099)"
+
+    # Start Nginx (daemon off, we background it ourselves)
+    nginx -c "$NGINX_CONF" &>/tmp/ob-k6-nginx-startup.log &
+    NGINX_PID=$!
+    sleep 1
+
+    # Verify Nginx is responding
     for i in {1..10}; do
         if curl -sf --max-time 2 "http://127.0.0.1:${OB_PORT}/api.php" -d 'c=account&a=uid' >/dev/null 2>&1; then
-            echo "  Server ready (PID $PHP_PID)"
-            if [ "$LOAD_LEVEL" != "10" ]; then
-                echo "  ⚠  PHP dev server is single-threaded. ${LOAD_LEVEL} VUs will queue — use Apache/Nginx for realistic results."
-            fi
+            echo "  Nginx ready (PID $NGINX_PID on :${OB_PORT})"
+            STARTED_SERVERS=true
             break
         fi
         if [ $i -eq 10 ]; then
-            echo "Error: PHP server failed to start within 10 seconds."
-            echo "  Check /tmp/ob_php_server.log for errors."
-            [ -n "$PHP_PID" ] && kill "$PHP_PID" 2>/dev/null
+            echo "Error: Nginx failed to respond within 10 seconds."
+            echo "  Check /tmp/ob-k6-nginx-error.log and /tmp/ob-k6-nginx-startup.log"
+            kill "$NGINX_PID" 2>/dev/null
+            # Stop PHP-FPM too
+            kill $(lsof -ti :9099) 2>/dev/null || true
             exit 1
         fi
         sleep 1
     done
 fi
 
-# Cleanup function: stop the PHP server if we started it
+# Cleanup function: stop Nginx + PHP-FPM if we started them
 cleanup() {
-    if [ -n "$PHP_PID" ]; then
-        kill "$PHP_PID" 2>/dev/null || true
-        wait "$PHP_PID" 2>/dev/null || true
-        echo "  PHP server stopped."
+    if [ "$STARTED_SERVERS" = true ]; then
+        echo ""
+        echo "  Stopping Nginx + PHP-FPM..."
+        # Stop nginx gracefully
+        [ -n "$NGINX_PID" ] && kill "$NGINX_PID" 2>/dev/null && wait "$NGINX_PID" 2>/dev/null
+        # Stop PHP-FPM (all workers on port 9099)
+        lsof -ti :9099 2>/dev/null | xargs kill 2>/dev/null || true
+        echo "  Servers stopped."
     fi
 }
 trap cleanup EXIT
@@ -186,7 +231,8 @@ k6 run \
 if [ "$K6_EXIT" -eq 99 ]; then
     echo ""
     echo "  ⚠  Thresholds crossed (exit 99) — review the results above."
-    echo "     This is expected on the PHP dev server (single-threaded)."
+    echo "     At higher VU counts, this indicates the server is under heavy load."
+    echo "     Try increasing pm.max_children in server/php-fpm-observer.conf."
 elif [ "$K6_EXIT" -ne 0 ]; then
     echo ""
     echo "  ✗  k6 failed with exit code $K6_EXIT"
