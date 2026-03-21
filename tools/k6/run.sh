@@ -242,6 +242,37 @@ fi
 echo ""
 echo "  HTML report saved to: ${REPORT_HTML}"
 
+# ── Post-run: clean up test-generated files on disk ─────────────────────────
+# k6's teardown deletes DB records (playlists, timeslots, media) but can't
+# remove files from disk. Upload scenarios leave behind files in media_data/.
+# Clean up everything created after the test started.
+
+UNAPPROVED_DIR="$OB_ROOT/media_data/unapproved"
+UPLOADS_DIR="$OB_ROOT/media_data/uploads"
+
+CLEANED=0
+if [ -d "$UNAPPROVED_DIR" ]; then
+    COUNT=$(find "$UNAPPROVED_DIR" -type f -newer "$SCRIPT_DIR/main.js" -name "*.mp3" 2>/dev/null | wc -l | tr -d ' ')
+    if [ "$COUNT" -gt 0 ]; then
+        find "$UNAPPROVED_DIR" -type f -newer "$SCRIPT_DIR/main.js" -name "*.mp3" -delete 2>/dev/null
+        # Remove empty directories left behind
+        find "$UNAPPROVED_DIR" -type d -empty -delete 2>/dev/null
+        CLEANED=$((CLEANED + COUNT))
+    fi
+fi
+
+if [ -d "$UPLOADS_DIR" ]; then
+    COUNT=$(find "$UPLOADS_DIR" -type f -newer "$SCRIPT_DIR/main.js" 2>/dev/null | wc -l | tr -d ' ')
+    if [ "$COUNT" -gt 0 ]; then
+        find "$UPLOADS_DIR" -type f -newer "$SCRIPT_DIR/main.js" -delete 2>/dev/null
+        CLEANED=$((CLEANED + COUNT))
+    fi
+fi
+
+if [ "$CLEANED" -gt 0 ]; then
+    echo "  Cleaned up $CLEANED test files from media_data/"
+fi
+
 # ── Post-run: baseline management ───────────────────────────────────────────
 
 if [ "$BASELINE_SAVE" = true ]; then
