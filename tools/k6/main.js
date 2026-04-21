@@ -1,19 +1,23 @@
 /**
  * OpenBroadcaster Observer — k6 Load Test Entry Point
  *
- * Orchestrates all 5 test scenarios at 10, 100, or 1000 concurrent users.
- * Run via: ./run.sh [10|100|1000]
+ * Orchestrates all 8 test scenarios at 10, 50, 100, or 1000 concurrent users.
+ * Run via: ./run.sh [10|50|100|1000]
  *
  * Scenarios:
- *   1. media_upload          — Two-step file upload + media creation
- *   2. playlist_creation     — Create playlists via v1 API
- *   3. scheduling            — Create timeslots via v1 API
- *   4. media_availability    — GET media by ID via v1 API
- *   5. playout_device_sync   — OBPlayer schedule fetch via remote.php
+ *   1. media_upload                — Two-step file upload + media creation
+ *   2. playlist_creation           — Create playlists via v1 API
+ *   3. scheduling                  — Create timeslots via v1 API
+ *   4. media_availability          — GET media by ID via v1 API
+ *   5. playout_device_sync         — OBPlayer schedule fetch via remote.php
+ *   6. preview_encoding            — GET /v2/downloads/media/{id}/preview (ffmpeg transcode)
+ *   7. playlist_dynamic_sections   — Resolve a playlist with many dynamic sections
+ *   8. bulk_metadata_edit          — POST media/save with a batch of ~50 items
  *
  * Auth strategy:
  *   - setup() logs in via v1 API and returns session credentials (id/key)
- *   - All scenarios use v1 session auth (c/a/d/i/k POST params)
+ *   - Most scenarios use v1 session auth (c/a/d/i/k POST params)
+ *   - preview_encoding uses X-Auth-ID/X-Auth-Key headers on v2 URL
  *   - playout_device_sync uses device auth (id/pw on remote.php)
  */
 
@@ -25,11 +29,14 @@ import { login, apiCall } from './lib/auth.js';
 import { checkUpload, checkResponse } from './lib/checks.js';
 
 // Import scenario functions.
-import mediaUpload        from './scenarios/media-upload.js';
-import playlistCreation   from './scenarios/playlist-creation.js';
-import scheduling         from './scenarios/scheduling.js';
-import mediaAvailability  from './scenarios/media-availability.js';
-import playoutDeviceSync  from './scenarios/playout-device-sync.js';
+import mediaUpload             from './scenarios/media-upload.js';
+import playlistCreation        from './scenarios/playlist-creation.js';
+import scheduling              from './scenarios/scheduling.js';
+import mediaAvailability       from './scenarios/media-availability.js';
+import playoutDeviceSync       from './scenarios/playout-device-sync.js';
+import previewEncoding         from './scenarios/preview-encoding.js';
+import playlistDynamicSections from './scenarios/playlist-dynamic-sections.js';
+import bulkMetadataEdit        from './scenarios/bulk-metadata-edit.js';
 
 // Load sample file at init time (k6 requires open() in module scope, not in setup).
 const sampleFile = open('./testdata/sample.mp3', 'b');
@@ -73,6 +80,24 @@ export const options = {
             vus:        vus.playout_device_sync,
             duration:   duration,
         },
+        preview_encoding: {
+            executor:   'constant-vus',
+            exec:       'previewEncodingScenario',
+            vus:        vus.preview_encoding,
+            duration:   duration,
+        },
+        playlist_dynamic_sections: {
+            executor:   'constant-vus',
+            exec:       'playlistDynamicSectionsScenario',
+            vus:        vus.playlist_dynamic_sections,
+            duration:   duration,
+        },
+        bulk_metadata_edit: {
+            executor:   'constant-vus',
+            exec:       'bulkMetadataEditScenario',
+            vus:        vus.bulk_metadata_edit,
+            duration:   duration,
+        },
     },
 
     thresholds: {
@@ -81,18 +106,24 @@ export const options = {
         'http_req_duration': ['p(95)<2000'],        // 95th percentile under 2s
 
         // Per-scenario response time thresholds
-        'http_req_duration{scenario:media_upload}':         ['p(95)<5000'],  // upload + ffprobe is slow
-        'http_req_duration{scenario:playlist_creation}':    ['p(95)<2000'],
-        'http_req_duration{scenario:scheduling}':           ['p(95)<2000'],
-        'http_req_duration{scenario:media_availability}':   ['p(95)<1000'],  // simple GET
-        'http_req_duration{scenario:playout_device_sync}':  ['p(95)<3000'],  // XML schedule generation
+        'http_req_duration{scenario:media_upload}':              ['p(95)<5000'],  // upload + ffprobe is slow
+        'http_req_duration{scenario:playlist_creation}':         ['p(95)<2000'],
+        'http_req_duration{scenario:scheduling}':                ['p(95)<2000'],
+        'http_req_duration{scenario:media_availability}':        ['p(95)<1000'],  // simple GET
+        'http_req_duration{scenario:playout_device_sync}':       ['p(95)<3000'],  // XML schedule generation
+        'http_req_duration{scenario:preview_encoding}':          ['p(95)<8000'],  // ffmpeg transcode on cache miss
+        'http_req_duration{scenario:playlist_dynamic_sections}': ['p(95)<3000'],  // dynamic resolve is N queries
+        'http_req_duration{scenario:bulk_metadata_edit}':        ['p(95)<30000'], // Rob reported 30-60s for 50-100 items
 
         // Per-scenario error rate thresholds
-        'http_req_failed{scenario:media_upload}':           ['rate<0.01'],
-        'http_req_failed{scenario:playlist_creation}':      ['rate<0.01'],
-        'http_req_failed{scenario:scheduling}':             ['rate<0.05'],   // collisions may cause some failures
-        'http_req_failed{scenario:media_availability}':     ['rate<0.01'],
-        'http_req_failed{scenario:playout_device_sync}':    ['rate<0.01'],
+        'http_req_failed{scenario:media_upload}':                ['rate<0.01'],
+        'http_req_failed{scenario:playlist_creation}':           ['rate<0.01'],
+        'http_req_failed{scenario:scheduling}':                  ['rate<0.05'],   // collisions may cause some failures
+        'http_req_failed{scenario:media_availability}':          ['rate<0.01'],
+        'http_req_failed{scenario:playout_device_sync}':         ['rate<0.01'],
+        'http_req_failed{scenario:preview_encoding}':            ['rate<0.05'],   // transcode races may fail some
+        'http_req_failed{scenario:playlist_dynamic_sections}':   ['rate<0.01'],
+        'http_req_failed{scenario:bulk_metadata_edit}':          ['rate<0.05'],   // lock contention possible
     },
 
     // Teardown needs extra time to clean up test data via API calls.
@@ -105,6 +136,7 @@ export const options = {
 export function setup() {
     console.log(`Load level: ${LOAD_LEVEL} | Duration: ${duration}`);
     console.log(`VUs: upload=${vus.media_upload} playlist=${vus.playlist_creation} schedule=${vus.scheduling} media_get=${vus.media_availability} sync=${vus.playout_device_sync}`);
+    console.log(`     preview=${vus.preview_encoding} dynamic=${vus.playlist_dynamic_sections} bulk=${vus.bulk_metadata_edit}`);
 
     // 1. Login via v1 API to get session credentials.
     const session = login(USERNAME, PASSWORD);
@@ -164,18 +196,101 @@ export function setup() {
         }
     }
 
-    // Return session credentials + media ID for all VUs.
-    return { session, mediaId };
+    // 3. Create a playlist with many dynamic sections for the dynamic_sections scenario.
+    //    Each section runs a simple-mode query on resolve, exposing the known
+    //    perf issue where resolve time scales with (sections × library size).
+    let dynamicPlaylistId = null;
+    try {
+        const dynamicItems = [];
+        for (let i = 0; i < 10; i++) {
+            dynamicItems.push({
+                type:           'dynamic',
+                name:           `k6-dyn-section-${i}`,
+                num_items:      5,
+                num_items_all:  false,
+                image_duration: 15,
+                crossfade:      0,
+                crossfade_last: 0,
+                query: JSON.stringify({
+                    mode:   'simple',
+                    string: '', // matches all approved media (artist/title LIKE '%%')
+                }),
+            });
+        }
+
+        const dynPlRes = apiCall(session, 'playlists', 'save', {
+            name:        `k6-test-dynamic-${Date.now()}`,
+            description: 'Load test playlist with 10 dynamic sections — safe to delete',
+            status:      'private',
+            type:        'standard',
+            items:       dynamicItems,
+        });
+
+        if (checkResponse(dynPlRes, 'setup')) {
+            dynamicPlaylistId = String(dynPlRes.json().data);
+            console.log(`Dynamic-sections playlist created (id: ${dynamicPlaylistId}, 10 sections)`);
+        }
+    } catch (e) {
+        console.warn(`Could not create dynamic playlist: ${e.message}`);
+    }
+
+    // 4. Gather existing media IDs for the bulk_metadata_edit scenario.
+    //    Prefer the current user's own media so the update path doesn't hit the
+    //    manage_media permission check. Target up to 50 items (Rob's reported
+    //    slow threshold).
+    let bulkMediaIds = [];
+    try {
+        const searchRes = apiCall(session, 'media', 'search', {
+            q:  { mode: 'simple', string: '' },
+            l:  50,
+            o:  0,
+            my: true,
+        });
+
+        if (checkResponse(searchRes, 'setup')) {
+            const body = searchRes.json();
+            if (body.data && Array.isArray(body.data.media)) {
+                bulkMediaIds = body.data.media.map((m) => ({
+                    id:                 m.id,
+                    artist:             m.artist,
+                    title:              m.title,
+                    album:              m.album,
+                    year:               m.year,
+                    category_id:        m.category_id,
+                    country:            m.country,
+                    language:           m.language,
+                    genre_id:           m.genre_id,
+                    status:             m.status,
+                    type:               m.type,
+                    is_copyright_owner: m.is_copyright_owner,
+                    is_approved:        m.is_approved,
+                }));
+            }
+        }
+
+        console.log(`Bulk-edit pool: ${bulkMediaIds.length} media items`);
+        if (bulkMediaIds.length < 50) {
+            console.warn(`  (pool <50 — to reproduce the reported 30-60s case, seed more media first)`);
+        }
+    } catch (e) {
+        console.warn(`Could not fetch bulk-edit media pool: ${e.message}`);
+    }
+
+    // Return session credentials + all test data for VUs.
+    return { session, mediaId, dynamicPlaylistId, bulkMediaIds };
 }
 
 // ---------------------------------------------------------------------------
 // Scenario executor functions (thin wrappers around imported modules)
 // ---------------------------------------------------------------------------
-export function mediaUploadScenario(data)       { mediaUpload(data); }
-export function playlistCreationScenario(data)   { playlistCreation(data); }
-export function schedulingScenario(data)         { scheduling(data); }
-export function mediaAvailabilityScenario(data)  { mediaAvailability(data); }
-export function playoutDeviceSyncScenario(data)  { playoutDeviceSync(data); }
+export function mediaUploadScenario(data)              { mediaUpload(data); }
+export function playlistCreationScenario(data)          { playlistCreation(data); }
+export function schedulingScenario(data)                { scheduling(data); }
+export function mediaAvailabilityScenario(data)         { mediaAvailability(data); }
+export function playoutDeviceSyncScenario(data)         { playoutDeviceSync(data); }
+export function previewEncodingScenario(data)           { previewEncoding(data); }
+export function playlistDynamicSectionsScenario(data)   { playlistDynamicSections(data); }
+export function bulkMetadataEditScenario(data)          { bulkMetadataEdit(data); }
 
 // ---------------------------------------------------------------------------
 // Teardown: clean up test data created during the run
@@ -273,6 +388,7 @@ export function handleSummary(data) {
     const scenarios = [
         'media_upload', 'playlist_creation', 'scheduling',
         'media_availability', 'playout_device_sync',
+        'preview_encoding', 'playlist_dynamic_sections', 'bulk_metadata_edit',
     ];
 
     const summary = {

@@ -3,7 +3,7 @@
 # OpenBroadcaster Observer — k6 Load Test Runner
 #
 # Usage:
-#   ./run.sh [10|100|1000] [--baseline-save] [--baseline-compare]
+#   ./run.sh [10|50|100|1000] [--baseline-save] [--baseline-compare]
 #
 # Examples:
 #   ./run.sh 10                         # smoke test with 10 VUs
@@ -43,12 +43,13 @@ set +a
 # Handle --help before anything else.
 case "${1:-}" in
     -h|--help)
-        echo "Usage: ./run.sh [10|100|1000] [--baseline-save] [--baseline-compare]"
+        echo "Usage: ./run.sh [10|50|100|1000] [--baseline-save] [--baseline-compare]"
         echo ""
         echo "Levels:"
-        echo "  10     Smoke test (10 concurrent users, 30s)"
-        echo "  100    Medium load (100 concurrent users, 60s)"
-        echo "  1000   Stress test (1000 concurrent users, 120s)"
+        echo "  10     Smoke test (10 VUs/scenario pattern, 30s)"
+        echo "  50     Moderate load (50-level pattern, 60s)"
+        echo "  100    Medium load (100 VUs/scenario pattern, 60s)"
+        echo "  1000   Stress test (1000 VUs/scenario pattern, 120s)"
         echo ""
         echo "Options:"
         echo "  --baseline-save      Save this run as the reference baseline"
@@ -66,12 +67,12 @@ for arg in "$@"; do
     case "$arg" in
         --baseline-save)    BASELINE_SAVE=true ;;
         --baseline-compare) BASELINE_COMPARE=true ;;
-        10|100|1000)        LOAD_LEVEL="$arg" ;;
+        10|50|100|1000)     LOAD_LEVEL="$arg" ;;
     esac
 done
 
-if [[ ! "$LOAD_LEVEL" =~ ^(10|100|1000)$ ]]; then
-    echo "Error: load level must be '10', '100', or '1000' (got '$LOAD_LEVEL')"
+if [[ ! "$LOAD_LEVEL" =~ ^(10|50|100|1000)$ ]]; then
+    echo "Error: load level must be '10', '50', '100', or '1000' (got '$LOAD_LEVEL')"
     echo "  Run ./run.sh --help for usage."
     exit 1
 fi

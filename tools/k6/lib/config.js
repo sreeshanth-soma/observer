@@ -26,22 +26,38 @@ export const LOAD_LEVEL       = __ENV.K6_LOAD_LEVEL || '10';
 
 // VU counts per scenario for each concurrency level.
 // Weighted by scenario heaviness: media_upload is expensive, media_availability is cheap.
+// Scenario keys match the scenario names in main.js options.scenarios.
 //
-//   Level  Total VUs  Breakdown
-//   ─────  ─────────  ─────────────────────────────────────────
-//     10        10    upload=1  playlist=2  schedule=2  avail=3  sync=2
-//    100       100    upload=10 playlist=20 schedule=20 avail=30 sync=20
-//   1000      1000    upload=100 playlist=200 schedule=200 avail=300 sync=200
+//   Level   Original 5 scenarios sum    New 3 scenarios sum
+//   ─────   ─────────────────────────   ────────────────────
+//     10          10                        6
+//     50          50                       30
+//    100         100                       60
+//   1000        1000                      600
 //
 export const VU_MAP = {
-    '10':   { media_upload: 1,   playlist_creation: 2,   scheduling: 2,   media_availability: 3,   playout_device_sync: 2   },
-    '100':  { media_upload: 10,  playlist_creation: 20,  scheduling: 20,  media_availability: 30,  playout_device_sync: 20  },
-    '1000': { media_upload: 100, playlist_creation: 200, scheduling: 200, media_availability: 300, playout_device_sync: 200 },
+    '10':   {
+        media_upload: 1,   playlist_creation: 2,   scheduling: 2,   media_availability: 3,   playout_device_sync: 2,
+        preview_encoding: 2,   playlist_dynamic_sections: 2,   bulk_metadata_edit: 2,
+    },
+    '50':   {
+        media_upload: 5,   playlist_creation: 10,  scheduling: 10,  media_availability: 15,  playout_device_sync: 10,
+        preview_encoding: 10,  playlist_dynamic_sections: 10,  bulk_metadata_edit: 10,
+    },
+    '100':  {
+        media_upload: 10,  playlist_creation: 20,  scheduling: 20,  media_availability: 30,  playout_device_sync: 20,
+        preview_encoding: 20,  playlist_dynamic_sections: 20,  bulk_metadata_edit: 20,
+    },
+    '1000': {
+        media_upload: 100, playlist_creation: 200, scheduling: 200, media_availability: 300, playout_device_sync: 200,
+        preview_encoding: 200, playlist_dynamic_sections: 200, bulk_metadata_edit: 200,
+    },
 };
 
 // Test duration per concurrency level.
 export const DURATION_MAP = {
     '10':   '30s',
+    '50':   '60s',
     '100':  '60s',
     '1000': '120s',
 };
